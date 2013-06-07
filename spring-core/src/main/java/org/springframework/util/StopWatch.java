@@ -24,7 +24,7 @@ import java.util.List;
  * Simple stop watch, allowing for timing of a number of tasks,
  * exposing total running time and running time for each named task.
  *
- * <p>Conceals use of {@code System.currentTimeMillis()}, improving the
+ * <p>Conceals use of {@code System.currentTimeMillis()} or {@code System.nanoTime()}, improving the
  * readability of application code and reducing the likelihood of calculation errors.
  *
  * <p>Note that this object is not designed to be thread-safe and does not
@@ -36,6 +36,7 @@ import java.util.List;
  * @author Rod Johnson
  * @author Juergen Hoeller
  * @author Sam Brannen
+ * @author Avinash R
  * @since May 2, 2001
  */
 public class StopWatch {
@@ -51,8 +52,10 @@ public class StopWatch {
 
 	private final List<TaskInfo> taskList = new LinkedList<TaskInfo>();
 
+	private final Resolution resolution;
+
 	/** Start time of the current task */
-	private long startTimeMillis;
+	private long startTime;
 
 	/** Is the stop watch currently running? */
 	private boolean running;
@@ -65,7 +68,7 @@ public class StopWatch {
 	private int taskCount;
 
 	/** Total running time */
-	private long totalTimeMillis;
+	private long totalTime;
 
 
 	/**
@@ -73,10 +76,20 @@ public class StopWatch {
 	 */
 	public StopWatch() {
 		this.id = "";
+		this.resolution = Resolution.MILLIS;
 	}
 
 	/**
-	 * Construct a new stop watch with the given id.
+	 * Construct a new stop watch with the given resolution. Does not start any task.
+	 * @param resolution the time resolution for the stop watch
+	 */
+	public StopWatch(Resolution resolution) {
+		this.id = "";
+		this.resolution = resolution;
+	}
+
+	/**
+	 * Construct a new stop watch with the given id with default resolution.
 	 * Does not start any task.
 	 * @param id identifier for this stop watch.
 	 * Handy when we have output from multiple stop watches
@@ -84,8 +97,21 @@ public class StopWatch {
 	 */
 	public StopWatch(String id) {
 		this.id = id;
+		this.resolution = Resolution.MILLIS;
 	}
 
+	/**
+	 * Construct a new stop watch with the given id and resolution.
+	 * Does not start any task.
+	 * @param id identifier for this stop watch.
+	 * Handy when we have output from multiple stop watches
+	 * and need to distinguish between them.
+	 * @param resolution the time resolution for the stop watch
+	 */
+	public StopWatch(String id, Resolution resolution) {
+		this.id = id;
+		this.resolution = resolution;
+	}
 
 	/**
 	 * Determine whether the TaskInfo array is built over time. Set this to
@@ -116,7 +142,7 @@ public class StopWatch {
 		if (this.running) {
 			throw new IllegalStateException("Can't start StopWatch: it's already running");
 		}
-		this.startTimeMillis = System.currentTimeMillis();
+		this.startTime = resolution.getCurrentTime();
 		this.running = true;
 		this.currentTaskName = taskName;
 	}
@@ -131,8 +157,8 @@ public class StopWatch {
 		if (!this.running) {
 			throw new IllegalStateException("Can't stop StopWatch: it's not running");
 		}
-		long lastTime = System.currentTimeMillis() - this.startTimeMillis;
-		this.totalTimeMillis += lastTime;
+		long lastTime = resolution.getCurrentTime() - this.startTime;
+		this.totalTime += lastTime;
 		this.lastTaskInfo = new TaskInfo(this.currentTaskName, lastTime);
 		if (this.keepTaskList) {
 			this.taskList.add(lastTaskInfo);
@@ -157,7 +183,7 @@ public class StopWatch {
 		if (this.lastTaskInfo == null) {
 			throw new IllegalStateException("No tasks run: can't get last task interval");
 		}
-		return this.lastTaskInfo.getTimeMillis();
+		return Math.round(resolution.timeInMillis(this.lastTaskInfo.getTime()));
 	}
 
 	/**
@@ -182,17 +208,17 @@ public class StopWatch {
 
 
 	/**
-	 * Return the total time in milliseconds for all tasks.
+	 * Return the total time for all tasks.
 	 */
-	public long getTotalTimeMillis() {
-		return this.totalTimeMillis;
+	public long getTotalTime() {
+		return this.totalTime;
 	}
 
 	/**
 	 * Return the total time in seconds for all tasks.
 	 */
 	public double getTotalTimeSeconds() {
-		return this.totalTimeMillis / 1000.0;
+		return resolution.timeInSeconds(this.totalTime);
 	}
 
 	/**
@@ -217,7 +243,7 @@ public class StopWatch {
 	 * Return a short description of the total running time.
 	 */
 	public String shortSummary() {
-		return "StopWatch '" + this.id + "': running time (millis) = " + getTotalTimeMillis();
+		return "StopWatch '" + this.id + "': running time = " + getTotalTime();
 	}
 
 	/**
@@ -240,8 +266,8 @@ public class StopWatch {
 			pf.setMinimumIntegerDigits(3);
 			pf.setGroupingUsed(false);
 			for (TaskInfo task : getTaskInfo()) {
-				sb.append(nf.format(task.getTimeMillis())).append("  ");
-				sb.append(pf.format(task.getTimeSeconds() / getTotalTimeSeconds())).append("  ");
+				sb.append(nf.format(resolution.timeInMillis(task.getTime()))).append("  ");
+				sb.append(pf.format(resolution.timeInSeconds(task.getTime()) / getTotalTimeSeconds())).append("  ");
 				sb.append(task.getTaskName()).append("\n");
 			}
 		}
@@ -257,8 +283,8 @@ public class StopWatch {
 		StringBuilder sb = new StringBuilder(shortSummary());
 		if (this.keepTaskList) {
 			for (TaskInfo task : getTaskInfo()) {
-				sb.append("; [").append(task.getTaskName()).append("] took ").append(task.getTimeMillis());
-				long percent = Math.round((100.0 * task.getTimeSeconds()) / getTotalTimeSeconds());
+				sb.append("; [").append(task.getTaskName()).append("] took ").append(resolution.timeInMillis(task.getTime()));
+				long percent = Math.round((100.0 * resolution.timeInSeconds(task.getTime())) / getTotalTimeSeconds());
 				sb.append(" = ").append(percent).append("%");
 			}
 		} else {
@@ -275,11 +301,11 @@ public class StopWatch {
 
 		private final String taskName;
 
-		private final long timeMillis;
+		private final long time;
 
-		TaskInfo(String taskName, long timeMillis) {
+		TaskInfo(String taskName, long time) {
 			this.taskName = taskName;
-			this.timeMillis = timeMillis;
+			this.time = time;
 		}
 
 		/**
@@ -290,17 +316,53 @@ public class StopWatch {
 		}
 
 		/**
-		 * Return the time in milliseconds this task took.
+		 * Return the time this task took.
 		 */
-		public long getTimeMillis() {
-			return this.timeMillis;
+		public long getTime() {
+			return this.time;
+		}
+	}
+
+	/**
+	 * Time resolution type 
+	 */
+	public static enum Resolution {
+		/**
+		 * Time resolution in milliseconds.<br>
+		 * Uses {@link System#currentTimeMillis()} for getting current time
+		 */
+		MILLIS(1000.0),
+		/**
+		 * Time resolution in nanoseconds.<br>
+		 * Uses {@link System#nanoTime()} for getting current time
+		 */
+		NANOS(1000000000.0);
+
+		private double modifier;
+
+		private Resolution(double modifier) {
+			this.modifier = modifier;
 		}
 
-		/**
-		 * Return the time in seconds this task took.
-		 */
-		public double getTimeSeconds() {
-			return this.timeMillis / 1000.0;
+		public long getCurrentTime() {
+			switch (this) {
+			case NANOS:
+				return System.nanoTime();
+			default:
+				return System.currentTimeMillis();
+			}
+		}
+
+		public double timeInSeconds(long time) {
+			return (time / modifier);
+		}
+
+		public double timeInMillis(long time) {
+			return timeInSeconds(time) * MILLIS.modifier;
+		}
+		
+		public double timeInNanos(long time) {
+			return timeInSeconds(time) * NANOS.modifier;
 		}
 	}
 
